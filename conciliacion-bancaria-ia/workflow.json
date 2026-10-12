@@ -1,0 +1,957 @@
+{
+  "name": "Bot de Conciliación Bancaria con IA",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "ID_CARPETA_ENTRADA",
+          "mode": "id"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        -32
+      ],
+      "id": "4fd3584b-dabb-4555-93c7-1794d27b5525",
+      "name": "1. Google Drive Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst mime = $input.item.binary.data.mimeType;\nconst base64 = buffer.toString('base64');\nconst dataUri = `data:${mime};base64,${base64}`;\n\nlet tipo = 'otro';\nif (mime.startsWith('image/')) tipo = 'imagen';\nelse if (mime === 'application/pdf') tipo = 'pdf';\nelse if (mime.startsWith('text/')) tipo = 'texto';\n\nreturn [{ json: { ...$json, tipo_archivo: tipo, dataUri }, binary: $input.item.binary }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        -32
+      ],
+      "id": "741fe60e-58d2-4d94-b825-ed23697802a0",
+      "name": "3. Detectar Tipo de Archivo"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        128,
+        -32
+      ],
+      "id": "c469af3d-2411-4981-8ff0-b5671442a8c2",
+      "name": "2. Download",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "af529c09-a203-4156-b1ca-a976b7f7ab3a",
+                    "leftValue": "={{ $json.tipo_archivo }}",
+                    "rightValue": "pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "PDF"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "8ec5697a-aeac-4c30-b09b-ffc6e81a57d6",
+                    "leftValue": "={{ $json.tipo_archivo }}",
+                    "rightValue": "imagen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Imagen"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        544,
+        -32
+      ],
+      "id": "012b8d99-4818-4c77-98ff-cdeaf0e790a2",
+      "name": "4. Enrutar por Tipo de Archivo"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { requestBody: {\n  model: \"gpt-4o\",\n  messages: [{ role: \"user\", content: [\n    { type: \"image_url\", image_url: { url: $json.dataUri } },\n    { type: \"text\", text: \"Extrae de esta factura: proveedor, importe_total (solo numero), numero_factura. Responde EXCLUSIVAMENTE con este JSON: {\\\"proveedor\\\":\\\"...\\\",\\\"importe_total\\\":0,\\\"numero_factura\\\":\\\"...\\\"}\" }\n  ]}]\n}}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        112
+      ],
+      "id": "686ae98b-8030-46aa-80d1-775b147359cf",
+      "name": "5B. Body Imagen"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { requestBody: {\n  model: \"gpt-4o\",\n  messages: [{ role: \"user\", content: [\n    { type: \"file\", file: { filename: \"factura.pdf\", file_data: $json.dataUri } },\n    { type: \"text\", text: \"Extrae de esta factura: proveedor, importe_total (solo numero), numero_factura. Responde EXCLUSIVAMENTE con este JSON: {\\\"proveedor\\\":\\\"...\\\",\\\"importe_total\\\":0,\\\"numero_factura\\\":\\\"...\\\"}\" }\n  ]}]\n}}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        -240
+      ],
+      "id": "e570f4d5-b55b-4417-8b04-9ceecc9f2a11",
+      "name": "5A. Body PDF"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content ?? '';\nlet txt = String(raw).trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();\n\nlet d;\ntry {\n  d = JSON.parse(txt);\n} catch (e) {\n  const m = txt.match(/\\{[\\s\\S]*\\}/);\n  d = m ? JSON.parse(m[0]) : { proveedor: '', importe_total: 0, numero_factura: '' };\n}\n\nreturn [{ json: d }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        -240
+      ],
+      "id": "6ef0beee-a43f-4e67-833b-8b5d9e3d1e41",
+      "name": "7A. Parsear JSON"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "ID_HOJA_CONCILIACION",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Banco"
+        },
+        "filtersUI": {
+          "values": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1456,
+        -240
+      ],
+      "id": "659101d8-0b55-4db3-b42b-d33dfa82fe94",
+      "name": "8A. Sheets · Leer Banco",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const factura = $('7A. Parsear JSON').item.json;\nconst filas = $input.all().map(i => i.json);\n\nconst TOLERANCIA = 0.01;\n\nconst coincidencia = filas.find(fila => {\n  const mismoNumero = String(fila.Numero_Factura).trim().toUpperCase() === String(factura.numero_factura).trim().toUpperCase();\n  const importeFila = parseFloat(fila.Importe);\n  const importeFactura = parseFloat(factura.importe_total);\n  const mismoImporte = Math.abs(importeFila - importeFactura) <= TOLERANCIA;\n  return mismoNumero && mismoImporte;\n});\n\nreturn [{\n  json: {\n    proveedor: factura.proveedor,\n    importe_total: factura.importe_total,\n    numero_factura: factura.numero_factura,\n    conciliado: !!coincidencia,\n    row_number: coincidencia ? coincidencia.row_number : null,\n    resultado: coincidencia\n      ? `Factura ${factura.numero_factura} procesada - Conciliado`\n      : `Factura ${factura.numero_factura} procesada - Pendiente (sin match en Banco)`\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -240
+      ],
+      "id": "dad3844f-7551-47a0-9369-44dfed3e5893",
+      "name": "9A. Code · Buscar Coincidencia"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1008,
+        -240
+      ],
+      "id": "76004fd6-19c3-43eb-9c32-c8a349dc61b8",
+      "name": "6A. Extraer Datos Factura (IA)",
+      "retryOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ac7f7ccf-283d-4def-8663-264d8757623e",
+              "leftValue": "={{ $json.conciliado }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1904,
+        -240
+      ],
+      "id": "a81f7fb6-445a-4858-a2c7-c62674f2e173",
+      "name": "10A. IF · Conciliado"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "ID_HOJA_CONCILIACION",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Banco"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Estado": "Conciliado",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "Fecha",
+              "displayName": "Fecha",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Concepto",
+              "displayName": "Concepto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Numero_Factura",
+              "displayName": "Numero_Factura",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Importe",
+              "displayName": "Importe",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Estado",
+              "displayName": "Estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2128,
+        -400
+      ],
+      "id": "aa418a08-c942-4c42-81f5-bb00022fb34e",
+      "name": "11A. Sheets · Marcar Conciliado",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d6c718ec-4112-41eb-ace2-88dbd3bc8c81",
+              "leftValue": "={{ $('9A. Code · Buscar Coincidencia').item.json.importe_total }}",
+              "rightValue": "={{ $('0. Config').item.json.umbral_gasto_elevado }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2352,
+        -224
+      ],
+      "id": "d4929dbb-bb18-4dea-88a9-5b5b1f263bfe",
+      "name": "12A. IF · Gasto Elevado"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('0. Config').item.json.correo_alertas }}",
+        "subject": "=Alerta: gasto elevado – factura {{ $('9A. Code · Buscar Coincidencia').item.json.numero_factura }}",
+        "message": "=¡Atención! Se detectó un gasto elevado.\n\nProveedor: {{ $('9A. Code · Buscar Coincidencia').item.json.proveedor }}\nFactura: {{ $('9A. Code · Buscar Coincidencia').item.json.numero_factura }}\nValor: ${{ Number($('9A. Code · Buscar Coincidencia').item.json.importe_total).toLocaleString('es-CO') }}\nEstado: {{ $('9A. Code · Buscar Coincidencia').item.json.conciliado ? 'Conciliado' : 'Pendiente (sin pago en el banco)' }}\n\nUmbral configurado: ${{ Number($('0. Config').item.json.umbral_gasto_elevado).toLocaleString('es-CO') }}",
+        "options": {
+          "appendAttribution": false
+        },
+        "emailType": "text"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2576,
+        -320
+      ],
+      "id": "75d88792-2f8e-4147-8982-20b19cf96e4a",
+      "name": "13A. Gmail · Alerta Gasto Elevado",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "ID_HOJA_CONCILIACION",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 138385838,
+          "mode": "list",
+          "cachedResultName": "Logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Fecha": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "Resultado": "={{ $('9A. Code · Buscar Coincidencia').item.json.resultado }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Fecha",
+              "displayName": "Fecha",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resultado",
+              "displayName": "Resultado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2800,
+        -208
+      ],
+      "id": "0323ffeb-59b8-4764-b58b-e63a19f94dd6",
+      "name": "14A. Sheets · Log Auditoría",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "ID_HOJA_CONCILIACION",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 138385838,
+          "mode": "list",
+          "cachedResultName": "Logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Fecha": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "Resultado": "=Error al extraer datos con IA: {{ $json.error?.message || 'error desconocido' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Fecha",
+              "displayName": "Fecha",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resultado",
+              "displayName": "Resultado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1232,
+        -16
+      ],
+      "id": "41b1cf2f-5bfd-44a0-925c-b526925ca280",
+      "name": "Sheets · Log Error IA",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('1. Google Drive Trigger').item.json.id }}",
+          "mode": "id"
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "ID_CARPETA_PROCESADAS",
+          "mode": "id"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3024,
+        -208
+      ],
+      "id": "760ff50c-4ede-4336-bb81-d26d296183a7",
+      "name": "15A. Drive · Mover a Procesadas"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "34418328-a859-4fd7-a736-b63b27adaf06",
+              "name": "umbral_gasto_elevado",
+              "value": 5000000,
+              "type": "number"
+            },
+            {
+              "id": "a14949ba-d21f-4f5e-8a31-34d416b315eb",
+              "name": "correo_alertas",
+              "value": "TU_CORREO@ejemplo.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -96,
+        -32
+      ],
+      "id": "2b18af85-fe1d-4223-b084-cf120f5fa3af",
+      "name": "0. Config"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "ID_HOJA_CONCILIACION",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Pendientes",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Fecha": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "Proveedor": "={{ $json.proveedor }}",
+            "Numero_Factura": "={{ $json.numero_factura }}",
+            "Importe": "={{ $json.importe_total }}",
+            "Estado": "Pendiente"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Fecha",
+              "displayName": "Fecha",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Proveedor",
+              "displayName": "Proveedor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Numero_Factura",
+              "displayName": "Numero_Factura",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Importe",
+              "displayName": "Importe",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Estado",
+              "displayName": "Estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2128,
+        -80
+      ],
+      "id": "4c437f8e-2d03-42b8-b8da-50ad1b2bb25f",
+      "name": "11B. Sheets · Registrar Pendiente",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "content": "## Bot de Conciliación Bancaria con IA\n\n**Qué hace:** cuando se sube una factura (PDF o imagen) a una carpeta de Google Drive, la IA extrae proveedor, número y valor, y la busca en el extracto bancario.\n\n- **Si el pago existe** en el banco → marca la fila como *Conciliado*.\n- **Si no existe** → la registra en *Pendientes*.\n- **Si supera el umbral** → envía alerta por correo.\n- Todo queda en el *Log* de auditoría y la factura se mueve a *Procesadas*.\n\n**Problema que resuelve:** el cruce manual de facturas contra el extracto bancario, que en una pyme toma horas cada mes y genera errores.",
+        "height": 420,
+        "width": 560,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -720
+      ],
+      "id": "616b78b2-ed15-490a-ac1c-c0c948269333",
+      "name": "Nota · Qué hace"
+    },
+    {
+      "parameters": {
+        "content": "## Configuración (5 minutos)\n\n1. **Credenciales:** Google Drive, Google Sheets, Gmail y OpenAI (Header Auth: `Authorization: Bearer <tu llave>`).\n2. **Nodo 0. Config:** umbral de gasto elevado (COP) y correo de alertas.\n3. **Reemplazar IDs:** `ID_CARPETA_ENTRADA`, `ID_CARPETA_PROCESADAS`, `ID_HOJA_CONCILIACION`.\n4. **Hoja de cálculo con 3 pestañas:**\n   - **Banco:** Fecha · Concepto · Numero_Factura · Importe · Estado\n   - **Pendientes:** Fecha · Proveedor · Numero_Factura · Importe · Estado\n   - **Logs:** Fecha · Resultado",
+        "height": 420,
+        "width": 560,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        40,
+        -720
+      ],
+      "id": "ca10ccf8-30ed-458d-bcef-eea62fc53866",
+      "name": "Nota · Configuración"
+    },
+    {
+      "parameters": {
+        "content": "### Lectura con IA\nAcepta **PDF e imágenes** (fotos de facturas). GPT-4o devuelve un JSON con proveedor, valor y número. Si la IA falla, el error queda registrado en el Log.",
+        "height": 160,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        720,
+        -460
+      ],
+      "id": "74c459dd-246e-46a9-b9aa-6d78e61ed4b3",
+      "name": "Nota · IA"
+    }
+  ],
+  "connections": {
+    "1. Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "0. Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Detectar Tipo de Archivo": {
+      "main": [
+        [
+          {
+            "node": "4. Enrutar por Tipo de Archivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Download": {
+      "main": [
+        [
+          {
+            "node": "3. Detectar Tipo de Archivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Enrutar por Tipo de Archivo": {
+      "main": [
+        [
+          {
+            "node": "5A. Body PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "5B. Body Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5A. Body PDF": {
+      "main": [
+        [
+          {
+            "node": "6A. Extraer Datos Factura (IA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7A. Parsear JSON": {
+      "main": [
+        [
+          {
+            "node": "8A. Sheets · Leer Banco",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8A. Sheets · Leer Banco": {
+      "main": [
+        [
+          {
+            "node": "9A. Code · Buscar Coincidencia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6A. Extraer Datos Factura (IA)": {
+      "main": [
+        [
+          {
+            "node": "7A. Parsear JSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets · Log Error IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9A. Code · Buscar Coincidencia": {
+      "main": [
+        [
+          {
+            "node": "10A. IF · Conciliado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10A. IF · Conciliado": {
+      "main": [
+        [
+          {
+            "node": "11A. Sheets · Marcar Conciliado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "11B. Sheets · Registrar Pendiente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11A. Sheets · Marcar Conciliado": {
+      "main": [
+        [
+          {
+            "node": "12A. IF · Gasto Elevado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12A. IF · Gasto Elevado": {
+      "main": [
+        [
+          {
+            "node": "13A. Gmail · Alerta Gasto Elevado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "14A. Sheets · Log Auditoría",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13A. Gmail · Alerta Gasto Elevado": {
+      "main": [
+        [
+          {
+            "node": "14A. Sheets · Log Auditoría",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5B. Body Imagen": {
+      "main": [
+        [
+          {
+            "node": "6A. Extraer Datos Factura (IA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14A. Sheets · Log Auditoría": {
+      "main": [
+        [
+          {
+            "node": "15A. Drive · Mover a Procesadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "0. Config": {
+      "main": [
+        [
+          {
+            "node": "2. Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11B. Sheets · Registrar Pendiente": {
+      "main": [
+        [
+          {
+            "node": "12A. IF · Gasto Elevado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
